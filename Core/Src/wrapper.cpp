@@ -25,7 +25,7 @@ namespace
 	void fifo1_callback(const ReceivedMessage& message) noexcept;
 	void motor_state_callback(const ReceivedMessage& message) noexcept;
 
-	enum InjectMotor : u8
+	enum InjectorIndex : u8
 	{
 		TuskL,
 		TuskR,
@@ -135,7 +135,25 @@ namespace
 	/// @param message
 	void servo_callback(const ReceivedMessage& message) noexcept
 	{
+		switch(message.data.buffer[0])
+		{
+			case TuskL:
+			{
 
+			}
+			break;
+
+			case TuskR:
+			{
+
+			}
+			break;
+
+			case Trunk:
+			{
+				
+			}
+		}
 	}
 
 	/// @brief インジェクターのコールバック
