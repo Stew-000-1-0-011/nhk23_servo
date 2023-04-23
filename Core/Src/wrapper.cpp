@@ -1,3 +1,15 @@
+/**
+ * @file wrapper.cpp
+ * @author your name (you@domain.com)
+ * @brief 
+ * @version 0.1
+ * @date 2023-04-23
+ * 
+ * @copyright Copyright (c) 2023
+ * @attention fmiに起因するwarningは無視してください。それ以外のwarningは修正してください。
+ */
+
+
 #include <array>
 
 #include "can.h"
@@ -7,8 +19,6 @@
 #include <CRSLibtmp/utility.hpp>
 #include <CRSLibtmp/Can/Stm32/RM0008/can_bus.hpp>
 #include <CRSLibtmp/Can/Stm32/RM0008/filter_manager.hpp>
-
-#include "injector.hpp"
 
 //PA9 TIM1_CH2
 //__HAL_TIM_SET_COMPARE(&htim1,TIM_CHANNEL_2,???)
@@ -27,32 +37,22 @@ namespace Nhk23Servo
 	void servo_callback(const ReceivedMessage& message) noexcept;
 	void inject_callback(const ReceivedMessage& message) noexcept;
 
-	void fifo1_callback(const ReceivedMessage& message) noexcept;
-	void motor_state_callback(const ReceivedMessage& message) noexcept;
-
 	enum Index : u8
 	{
 		TuskL,
 		TuskR,
 		Trunk
 	};
-
-//	std::array<Injector, 3> injectors
-//	{
-//		Injector{20.35, CRSLib::Math::Pid<i16>{.p=1, .i=0, .d=0}},
-//		Injector{18.75, CRSLib::Math::Pid<i16>{.p=1, .i=0, .d=0}},
-//		Injector{14.85, CRSLib::Math::Pid<i16>{.p=1, .i=0, .d=0}}
-//	};
 }
 
 i16 speed = 0;
-Nhk23Servo::Index selected = Nhk23Servo::TuskL;
 u32 time = 0;
-volatile i32 duration = 100;
-volatile i32 speed_max = 0x3c'00;
-volatile int debug_var = 0;
+Nhk23Servo::Index selected = Nhk23Servo::TuskL;
 
-volatile int hoge = 0;
+// Live Expressionでいじって(稀に誤作動するからEMSは手放さないこと。多分HAL_GetTickの戻り値が0に戻ったあたりのなんかなんじゃないかなあ...)
+volatile u32 duration = 100;
+volatile i32 speed_max = 0x3c'00;
+
 extern "C" void main_cpp()
 {
 
@@ -63,9 +63,6 @@ extern "C" void main_cpp()
 	// 通信開始
 	CanBus can_bus{can1};
 
-//	// まさか数日間動かすなんてことないだろ
-//	auto time = HAL_GetTick();
-
 	while(true)
 	{
 		// FIFO0の受信
@@ -74,34 +71,15 @@ extern "C" void main_cpp()
 			if(message) Nhk23Servo::fifo0_callback(*message);
 		}
 
-		// FIFO1の受信
-		{
-			const auto message = can_bus.receive(Fifo::Fifo1);
-			if(message) Nhk23Servo::fifo1_callback(*message);
-		}
-
-//		// C620へ電流指令値を送信
-//		if(const auto now = HAL_GetTick(); now - time >= 2)
-//		{
-//			CRSLib::Can::DataField data{.buffer={}, .dlc=8};
-//			for(u8 i = 0; auto& injector : Nhk23Servo::injectors)
-//			{
-//				const i16 target = injector.run_and_calc_target();
-//				std::memcpy(data.buffer + sizeof(i16) * i, &target, sizeof(i16));
-//				++i;
-//			}
-//
-//			hoge = 1;
-//			(void)can_bus.post(0x200, data);
-//
-//			time = now;
-//		}
+		// 止める
 		if(const auto now = HAL_GetTick(); speed != 0 && now - time > duration)
 		{
 			speed = 0;
 			CRSLib::Can::DataField data{.buffer={}, .dlc=8};
 			(void)can_bus.post(0x200, data);
 		}
+
+		// 動かす
 		if(speed != 0)
 		{
 			CRSLib::Can::DataField data{.buffer={}, .dlc=8};
@@ -115,6 +93,7 @@ extern "C" void main_cpp()
 
 namespace Nhk23Servo
 {
+	// 各種CANのID
 	constexpr u32 servo_id = 0x110;
 	constexpr u32 inject_speed_id_base = 0x120;  // 0x120-0x122
 	constexpr u32 inject_speed_id_mask = 0x7FC;
@@ -132,16 +111,14 @@ namespace Nhk23Servo
 		enum FilterName : u8
 		{
 			Servo,
-			InjectSpeed,
-			MotorState,
+			Inject,
 
 			N
 		};
 
 		FilterConfig filter_configs[N];
 		filter_configs[Servo] = FilterConfig::make_default(Fifo::Fifo0);
-		filter_configs[InjectSpeed] = FilterConfig::make_default(Fifo::Fifo0, false);
-		filter_configs[MotorState] = FilterConfig::make_default(Fifo::Fifo1, false);
+		filter_configs[Inject] = FilterConfig::make_default(Fifo::Fifo0, false);
 
 		// ここでフィルタの初期化を行う
 		FilterManager::initialize(filter_bank_size, filter_configs);
@@ -153,20 +130,12 @@ namespace Nhk23Servo
 		}
 		FilterManager::activate(Servo);
 
-		if(!FilterManager::set_filter(InjectSpeed, FilterManager::make_mask32(inject_speed_id_base, inject_speed_id_mask)))
+		if(!FilterManager::set_filter(Inject, FilterManager::make_mask32(inject_speed_id_base, inject_speed_id_mask)))
 		{
-			error_msg = "Fail to set filter for InjectSpeed";
+			error_msg = "Fail to set filter for Inject";
 			Error_Handler();
 		}
-		FilterManager::activate(InjectSpeed);
-
-		/// @todo C620のIDを1~3に。
-		if(!FilterManager::set_filter(MotorState, FilterManager::make_mask32(motor_state_id_base, motor_state_id_mask)))
-		{
-			error_msg = "Fail to set filter for MotorState";
-			Error_Handler();
-		}
-		FilterManager::activate(MotorState);
+		FilterManager::activate(Inject);
 	}
 
 	//////// ここから下はコールバック関数 ////////
@@ -217,39 +186,8 @@ namespace Nhk23Servo
 	/// @param message
 	void inject_callback(const ReceivedMessage& message) noexcept
 	{
-		const auto which = static_cast<Index>(message.id - inject_speed_id_base);
-//		const i16 speed = (u8)message.data.buffer[0] << 8 | (u8)(message.data.buffer[1]);
-//
-//		Nhk23Servo::injectors[which].inject_start(speed);
-
-//		speed = (u8)message.data.buffer[0] << 8 | (u8)(message.data.buffer[1]);
+		selected = static_cast<Index>(message.id - inject_speed_id_base);
 		speed = speed_max;
-		selected = which;
 		time = HAL_GetTick();
-
-	}
-
-	/// @brief fifo1のコールバック
-	/// @param message
-	void fifo1_callback(const ReceivedMessage& message) noexcept
-	{
-		if(0x201 <= message.id && message.id <= 0x203)
-		{
-			motor_state_callback(message);
-		}
-	}
-
-	/// @brief モーターの状態のコールバック
-	/// @param message
-	void motor_state_callback(const ReceivedMessage& message) noexcept
-	{
-		const auto which = static_cast<Index>(message.id - motor_state_id_base);
-
-		Feedback feedback{};
-		feedback.angle = (u32)message.data.buffer[0] << 8 | (u32)(message.data.buffer[1]);
-		feedback.speed = CRSLib::bit_cast<i16>((u16)((u32)message.data.buffer[2] << 8 | (u32)(message.data.buffer[3])));
-		feedback.current = CRSLib::bit_cast<i16>((u16)((u32)message.data.buffer[4] << 8 | (u32)(message.data.buffer[5])));
-
-//		injectors[which].update_motor_state(feedback);
 	}
 }
