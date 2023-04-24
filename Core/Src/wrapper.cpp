@@ -35,7 +35,6 @@ namespace Nhk23Servo
 
 	void fifo0_callback(const ReceivedMessage& message) noexcept;
 	void servo_callback(const ReceivedMessage& message) noexcept;
-	void inject_callback(const ReceivedMessage& message) noexcept;
 
 	enum Index : u8
 	{
@@ -44,14 +43,6 @@ namespace Nhk23Servo
 		Trunk
 	};
 }
-
-i16 speed = 0;
-u32 time = 0;
-Nhk23Servo::Index selected = Nhk23Servo::TuskL;
-
-// Live Expressionでいじって(稀に誤作動するからEMSは手放さないこと。多分HAL_GetTickの戻り値が0に戻ったあたりのなんかなんじゃないかなあ...)
-volatile u32 duration = 270;
-volatile i32 speed_max = 16000;
 
 extern "C" void main_cpp()
 {
@@ -70,20 +61,6 @@ extern "C" void main_cpp()
 			const auto message = can_bus.receive(Fifo::Fifo0);
 			if(message) Nhk23Servo::fifo0_callback(*message);
 		}
-
-		// 止める
-		if(const auto now = HAL_GetTick(); now - time > duration)
-		{
-			speed = 0;
-			CRSLib::Can::DataField data{.buffer={}, .dlc=8};
-			(void)can_bus.post(0x200, data);
-		}
-
-		// 動かす
-		CRSLib::Can::DataField data{.buffer={}, .dlc=8};
-		data.buffer[2 * selected] = (byte)((speed & 0xFF'00) >> 8);
-		data.buffer[2 * selected + 1] = (byte)(speed & 0x00'FF);
-		(void)can_bus.post(0x200, data);
 	}
 }
 
@@ -92,12 +69,6 @@ namespace Nhk23Servo
 {
 	// 各種CANのID
 	constexpr u32 servo_id = 0x110;
-	constexpr u32 inject_speed_id_base = 0x120;  // 0x120-0x122
-	constexpr u32 inject_speed_id_mask = 0x7FC;
-	constexpr u32 inject_feedback_id_base = 0x130;  // 0x130-0x132
-	constexpr u32 inject_feedback_id_mask = 0x7FC;
-	constexpr u32 motor_state_id_base = 0x201;  // 0x201-0x203
-	constexpr u32 motor_state_id_mask = 0x7FC;
 
 	void init_can_other() noexcept
 	{
@@ -108,14 +79,12 @@ namespace Nhk23Servo
 		enum FilterName : u8
 		{
 			Servo,
-			Inject,
 
 			N
 		};
 
 		FilterConfig filter_configs[N];
 		filter_configs[Servo] = FilterConfig::make_default(Fifo::Fifo0);
-		filter_configs[Inject] = FilterConfig::make_default(Fifo::Fifo0, false);
 
 		// ここでフィルタの初期化を行う
 		FilterManager::initialize(filter_bank_size, filter_configs);
@@ -126,13 +95,6 @@ namespace Nhk23Servo
 			Error_Handler();
 		}
 		FilterManager::activate(Servo);
-
-		if(!FilterManager::set_filter(Inject, FilterManager::make_mask32(inject_speed_id_base, inject_speed_id_mask)))
-		{
-			error_msg = "Fail to set filter for Inject";
-			Error_Handler();
-		}
-		FilterManager::activate(Inject);
 	}
 
 	//////// ここから下はコールバック関数 ////////
@@ -145,10 +107,6 @@ namespace Nhk23Servo
 		if(message.id == servo_id)
 		{
 			servo_callback(message);
-		}
-		else if(inject_speed_id_base <= message.id && message.id <= inject_speed_id_base + 2)
-		{
-			inject_callback(message);
 		}
 	}
 
@@ -177,15 +135,5 @@ namespace Nhk23Servo
 
 			default:;
 		}
-	}
-
-	/// @brief インジェクターのコールバック
-	/// @param message
-	void inject_callback(const ReceivedMessage& message) noexcept
-	{
-		if(speed != 0) return;
-		selected = static_cast<Index>(message.id - inject_speed_id_base);
-		speed = speed_max;
-		time = HAL_GetTick();
 	}
 }
