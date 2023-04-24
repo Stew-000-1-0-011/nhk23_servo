@@ -1,10 +1,10 @@
 /**
  * @file wrapper.cpp
  * @author your name (you@domain.com)
- * @brief 
+ * @brief
  * @version 0.1
  * @date 2023-04-23
- * 
+ *
  * @copyright Copyright (c) 2023
  * @attention fmiに起因するwarningは無視してください。それ以外のwarningは修正してください。
  */
@@ -50,8 +50,8 @@ u32 time = 0;
 Nhk23Servo::Index selected = Nhk23Servo::TuskL;
 
 // Live Expressionでいじって(稀に誤作動するからEMSは手放さないこと。多分HAL_GetTickの戻り値が0に戻ったあたりのなんかなんじゃないかなあ...)
-volatile u32 duration = 100;
-volatile i32 speed_max = 0x3c'00;
+volatile u32 duration = 270;
+volatile i32 speed_max = 16000;
 
 extern "C" void main_cpp()
 {
@@ -72,7 +72,7 @@ extern "C" void main_cpp()
 		}
 
 		// 止める
-		if(const auto now = HAL_GetTick(); speed != 0 && now - time > duration)
+		if(const auto now = HAL_GetTick(); now - time > duration)
 		{
 			speed = 0;
 			CRSLib::Can::DataField data{.buffer={}, .dlc=8};
@@ -80,13 +80,10 @@ extern "C" void main_cpp()
 		}
 
 		// 動かす
-		if(speed != 0)
-		{
-			CRSLib::Can::DataField data{.buffer={}, .dlc=8};
-			data.buffer[2 * selected] = (byte)((speed & 0xFF'00) >> 8);
-			data.buffer[2 * selected + 1] = (byte)(speed & 0x00'FF);
-			(void)can_bus.post(0x200, data);
-		}
+		CRSLib::Can::DataField data{.buffer={}, .dlc=8};
+		data.buffer[2 * selected] = (byte)((speed & 0xFF'00) >> 8);
+		data.buffer[2 * selected + 1] = (byte)(speed & 0x00'FF);
+		(void)can_bus.post(0x200, data);
 	}
 }
 
@@ -186,6 +183,7 @@ namespace Nhk23Servo
 	/// @param message
 	void inject_callback(const ReceivedMessage& message) noexcept
 	{
+		if(speed != 0) return;
 		selected = static_cast<Index>(message.id - inject_speed_id_base);
 		speed = speed_max;
 		time = HAL_GetTick();
